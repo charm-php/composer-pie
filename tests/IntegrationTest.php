@@ -149,4 +149,29 @@ final class IntegrationTest extends TestCase
         $this->sh('vendor/bin/pie install </dev/null');
         $this->assertSame('1', $this->sh('vendor/bin/php -r \'echo (int) extension_loaded("ds");\''));
     }
+
+    /** No compiler on PATH: --install-toolchain downloads a conda-forge gcc into the cache and builds with it. */
+    public function testBuildsWithAToolchainFromTheCacheWhenTheSystemHasNoCompiler(): void
+    {
+        if (\Charm\ComposerPie\Toolchain::platform() === null) {
+            $this->markTestSkipped('toolchain is for Linux glibc x86_64/aarch64');
+        }
+        // PATH of symlinks to everything except the build tools
+        mkdir($this->project . '/nocc');
+        foreach (array_merge(glob('/usr/bin/*'), glob('/bin/*')) as $file) {
+            $name = basename($file);
+            if (!preg_match('/^(cc|gcc|g\+\+|c\+\+|cpp|clang.*|g?make|auto.*|m4|ld(\..*)?|as|.*-linux-gnu-.*|gcc-.*)$/', $name) && !file_exists($this->project . '/nocc/' . $name)) {
+                symlink($file, $this->project . '/nocc/' . $name);
+            }
+        }
+        $this->env = 'COMPOSER_ROOT_VERSION=1.0.0 PATH=' . escapeshellarg($this->project . '/nocc') . ' ';
+
+        $out = $this->sh('vendor/bin/pie install php-ds/ext-ds </dev/null', 1);
+        $this->assertStringContainsString('--install-toolchain', $out, 'non-interactive without the flag explains and fails');
+
+        $this->sh('vendor/bin/pie install php-ds/ext-ds --install-toolchain </dev/null');
+        $so = glob($this->project . '/vendor/php-ext/root/*/*/*/*/ds.so')[0];
+        $this->assertStringContainsString('conda-forge gcc', (string) shell_exec('readelf -p .comment ' . escapeshellarg($so)));
+        $this->assertSame('1', $this->sh('vendor/bin/php -r \'echo (int) extension_loaded("ds");\''));
+    }
 }

@@ -31,6 +31,27 @@ and passed on later runs, so project mode needs no arguments afterwards.
   stderr suggesting to run it again, and carries on. Projects that never ran `vendor/bin/pie` are not nagged.
 - An extension the system PHP already loads is installed but left disabled in the project (no "already loaded" warnings).
 
+## Building from source
+
+`vendor/bin/pie install` first lets PIE use only pre-built binaries published by the extension. If there is none
+for your platform, composer-pie checks for a build environment: a C compiler, `make`, `autoconf`, `m4`, and
+`phpize` + `php-config` for exactly the PHP you target (same version, extension_dir), and then lets PIE build from
+source. PIE's own offer to install build tools with the system package manager (sudo) is switched off.
+
+If something is missing and you are on Linux (glibc, x86_64 or aarch64), composer-pie can provide it in
+`${XDG_CACHE_HOME:-~/.cache}/composer-pie/toolchain/`, shared by all projects, and nothing is installed system-wide:
+
+- a C toolchain from conda-forge (gcc with a glibc 2.28 sysroot, make, autoconf, m4, perl, zlib; about 170 MB
+  download, 800 MB on disk) installed with a pinned micromamba and pinned lock files (`toolchain/*.lock`, sha256
+  verified);
+- if the PHP has no `php-config`/`phpize` (no `-dev` package), these and the headers are built from the matching
+  php-src release (sha256 verified against php.net), about 10 MB.
+
+It asks `[y/N]` when interactive. Non-interactively, pass `--install-toolchain` or set `COMPOSER_PIE_TOOLCHAIN=1`,
+otherwise it explains what is missing and fails. On other platforms (musl, macOS) it tells you what to install
+(`apk add build-base autoconf php-dev`, `xcode-select --install`, ...). Extensions that need system libraries
+(other than zlib) still need those libraries' headers installed; the toolchain's compiler does not search `/usr/include`.
+
 ## Composer and `ext-*` requirements
 
 Composer checks `ext-*` requirements against the PHP that runs Composer, which does not load the project's
@@ -45,8 +66,6 @@ once after the first install if you have a lock file.
 
 - CLI and long-running servers started through `vendor/bin/php` only. Not php-fpm or mod_php: they do not go through the
   wrapper.
-- No compiler is provided: when a package has no pre-built binary for your platform, PIE builds it and needs the usual
-  `phpize`, `gcc`, `make`, `autoconf` (and the PHP development headers).
 - `pie show` and `pie upgrade` do not understand project installs (PIE looks for the `.so` in the system extension
   directory). Re-run `pie install <package>` to upgrade.
 - Linux and macOS only for now; Windows not yet.

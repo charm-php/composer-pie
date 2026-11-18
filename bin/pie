@@ -10,8 +10,10 @@
 declare(strict_types=1);
 
 require __DIR__ . '/../src/PhpExt.php';
+require __DIR__ . '/../src/Toolchain.php';
 
 use Charm\ComposerPie\PhpExt;
+use Charm\ComposerPie\Toolchain;
 
 const PIE_VERSION = '1.5.5';
 const PIE_SHA256 = '2ca0dff6868f1b53c095625674deef38ac698588e0a25e4321cd834a5b7553bc';
@@ -46,6 +48,8 @@ $composerConfig = function (string ...$args) use ($root): void {
 };
 
 $args = array_slice($argv, 1);
+$installToolchain = in_array('--install-toolchain', $args, true) || getenv('COMPOSER_PIE_TOOLCHAIN') === '1';
+$args = array_values(array_diff($args, ['--install-toolchain']));
 $command = null;
 foreach ($args as $arg) {
     if ($arg === '--') {
@@ -134,8 +138,64 @@ if ($command === 'install') {
     }
 }
 
-$process = proc_open([$php, $phar, ...$args], [STDIN, STDOUT, STDERR], $pipes, null, $env);
-$exit = proc_close($process);
+// Runs PIE. Optionally holds back its stderr, to show it only if we do not go on to try something else.
+$runPie = function (array $args, array $env, bool $holdStderr) use ($php, $phar): array {
+    $process = proc_open([$php, $phar, ...$args], [STDIN, STDOUT, $holdStderr ? ['pipe', 'w'] : STDERR], $pipes, null, $env);
+    $stderr = $holdStderr ? stream_get_contents($pipes[2]) : '';
+
+    return [proc_close($process), $stderr];
+};
+
+if ($command === 'install' || $command === 'upgrade') {
+    // Never let PIE offer to install build tools or libraries with the system package manager (sudo): the
+    // build environment is ours to check, below.
+    $args = [...$args, '--no-build-tools-check', '--no-system-dependencies-check'];
+    // First try only pre-built binaries, so a build environment is not needed unless there is no other way.
+    [$exit, $stderr] = $runPie([...$args, '--suppress-download-url-method=composer-default', '--suppress-download-url-method=pre-packaged-source'], $env, true);
+    $flat = preg_replace('/\s+/', '', $stderr);  // PIE wraps its error boxes, even mid-word
+    if ($exit !== 0 && (str_contains($flat, 'allpossibledownloadURLmethodsweresuppressed') || str_contains($flat, 'Couldnotfindreleaseassetfor'))) {
+        fwrite(STDERR, "composer-pie: no pre-built binary for this platform; building from source\n");
+        $toolchain = new Toolchain($cache, $php);
+        $path = (string) getenv('PATH');
+        $toolBin = null;
+        $missing = Toolchain::missingTools($path);
+        $phpConfig = $toolchain->findPhpConfig();
+        if ($missing || !$phpConfig) {
+            $platform = Toolchain::platform();
+            $what = implode(', ', [...$missing, ...($phpConfig ? [] : ['phpize and php-config for PHP ' . PHP_VERSION . ' (' . $php . ')'])]);
+            if ($platform === null) {
+                fwrite(STDERR, "composer-pie: cannot build from source, missing: $what\n"
+                    . "  Linux (Debian/Ubuntu): apt install build-essential autoconf php-dev (the dev package of this PHP)\n"
+                    . "  Alpine: apk add build-base autoconf php-dev    macOS: xcode-select --install && brew install autoconf\n");
+                exit(1);
+            }
+            $interactive = stream_isatty(STDIN) && getenv('COMPOSER_NO_INTERACTION') !== '1' && !array_intersect($args, ['-n', '--no-interaction']);
+            if (!$installToolchain && $interactive) {
+                fwrite(STDERR, "composer-pie: cannot build from source, missing: $what\nInstall a C toolchain (about 170 MB) into $cache/toolchain? [y/N] ");
+                $installToolchain = in_array(strtolower(trim((string) fgets(STDIN))), ['y', 'yes'], true);
+            }
+            if (!$installToolchain) {
+                fwrite(STDERR, "composer-pie: cannot build from source, missing: $what\n"
+                    . "  Install them, or run again with --install-toolchain (or COMPOSER_PIE_TOOLCHAIN=1) to let composer-pie\n"
+                    . "  download a C toolchain into $cache/toolchain (nothing is installed system-wide).\n");
+                exit(1);
+            }
+            try {
+                $toolBin = $missing ? $toolchain->installToolchain() : null;
+                $phpConfig ??= $toolchain->buildPhpDevelopment($toolBin);
+            } catch (RuntimeException $e) {
+                fwrite(STDERR, 'composer-pie: ' . $e->getMessage() . "\n");
+                exit(1);
+            }
+            $toolBin !== null && $env['PATH'] = $toolBin . ':' . $path;
+        }
+        [$exit] = $runPie([...$args, '--with-php-config=' . $phpConfig[0], '--with-phpize-path=' . $phpConfig[1]], $env, false);
+    } else {
+        fwrite(STDERR, $stderr);
+    }
+} else {
+    [$exit] = $runPie($args, $env, false);
+}
 
 // Does the system PHP, without the project's extensions, already load extension $name?
 $systemLoads = function (string $name) use ($php, $confDir): bool {
