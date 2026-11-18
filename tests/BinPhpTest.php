@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Charm\ComposerPie\Tests;
 
+use Charm\ComposerPie\PhpExt;
 use PHPUnit\Framework\TestCase;
 
 /** bin/php, run the way Composer's vendor/bin proxy runs it, in a fake project. */
@@ -39,12 +40,12 @@ final class BinPhpTest extends TestCase
     public function testPrependsProjectConfDAndKeepsSystemDir(): void
     {
         $out = $this->phpWith('env -u PHP_INI_SCAN_DIR PATH=' . escapeshellarg($this->project . '/vendor/bin:' . getenv('PATH')), 'echo getenv("PHP_INI_SCAN_DIR");');
-        $this->assertSame(':' . $this->project . '/vendor/php-ext/conf.d', $out);
+        $this->assertSame(':' . PhpExt::confDirFor($this->project . '/vendor/php-ext', PHP_BINARY), $out);
     }
 
     public function testKeepsExistingScanDirAndDoesNotAddItTwice(): void
     {
-        $confd = $this->project . '/vendor/php-ext/conf.d';
+        $confd = PhpExt::confDirFor($this->project . '/vendor/php-ext', PHP_BINARY);
         $out = $this->phpWith('PHP_INI_SCAN_DIR=/a:/b', 'echo getenv("PHP_INI_SCAN_DIR");');
         $this->assertSame("/a:/b:$confd", $out);
         $out = $this->phpWith('PHP_INI_SCAN_DIR=:' . $confd, 'echo getenv("PHP_INI_SCAN_DIR");');
@@ -59,7 +60,7 @@ final class BinPhpTest extends TestCase
 
     public function testComposerPiePhpOverridesPathSearch(): void
     {
-        $out = $this->phpWith('COMPOSER_PIE_PHP=' . escapeshellarg(PHP_BINARY) . ' PATH=' . escapeshellarg($this->project . '/vendor/bin'), 'echo PHP_BINARY;');
+        $out = $this->phpWith('COMPOSER_PIE_PHP=' . escapeshellarg(PHP_BINARY) . ' PATH=' . escapeshellarg($this->project . '/vendor/bin:' . getenv('PATH')), 'echo PHP_BINARY;');
         $this->assertSame(PHP_BINARY, $out);
     }
 

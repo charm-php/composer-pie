@@ -41,11 +41,18 @@ foreach ($args as $arg) {
     if ($arg === '--') {
         break;
     }
-    if ($arg[0] !== '-') {
+    if ($arg !== '' && $arg[0] !== '-') {
         $command = $arg;
         break;
     }
 }
+
+// The PHP we install for: the one running this script, unless overridden. Each real PHP binary has its own
+// conf.d (and its own extension_dir below INSTALL_ROOT), because a .so only fits the PHP build it was made for.
+$php = getenv('COMPOSER_PIE_PHP') ?: PHP_BINARY;
+$confDir = PhpExt::confDirFor($phpExt, $php);
+$extDir = trim((string) shell_exec(escapeshellarg($php) . ' -n -r \'echo ini_get("extension_dir");\''));
+$soPrefix = $phpExt . '/root' . $extDir . '/';
 
 @mkdir($phpExt . "/pie", 0777, true);
 @mkdir($phpExt . "/root", 0777, true);
@@ -55,21 +62,20 @@ $env['INSTALL_ROOT'] = $phpExt . '/root';          // where PIE installs: INSTAL
 $env['PIE_WORKING_DIRECTORY'] = $phpExt . '/pie';  // pie.json, pie.lock and downloaded sources, instead of ~/.config/pie
 $env['COMPOSER_CACHE_DIR'] ??= $cache . '/composer-cache';
 // The target PHP (and PIE's own subprocesses) inherit this, so the project's extensions count as loaded.
-$scan = (string) ($env['PHP_INI_SCAN_DIR'] ?? '');
-if (!in_array($phpExt . '/conf.d', explode(':', $scan), true)) {
-    $env['PHP_INI_SCAN_DIR'] = $scan . ':' . $phpExt . '/conf.d';
-}
+// Entries of other PHPs' conf.d in this project are dropped (we may have been started through vendor/bin/php).
+$scan = array_filter(explode(':', (string) ($env['PHP_INI_SCAN_DIR'] ?? '')), fn ($d) => !str_starts_with($d, $phpExt . '/conf.d/'));
+$env['PHP_INI_SCAN_DIR'] = implode(':', $scan) . ':' . $confDir;
 
 if ($command === 'uninstall') {
     // PIE cannot do this: it loses track of project extensions (see PhpExt) and its uninstall would also edit
     // the system's php.ini / conf.d, with sudo if needed. So we remove the project's files ourselves.
     $status = 0;
     foreach (array_slice($args, array_search('uninstall', $args) + 1) as $arg) {
-        if ($arg[0] === '-') {
+        if ($arg === '' || $arg[0] === '-') {
             continue;
         }
         $package = explode(':', $arg)[0];
-        if (PhpExt::uninstall($phpExt, $package)) {
+        if (PhpExt::uninstall($phpExt, $confDir, $package)) {
             echo "Removed $package from this project\n";
         } else {
             fwrite(STDERR, "composer-pie: $package is not installed in this project\n");
@@ -83,15 +89,14 @@ if ($command === 'install' || $command === 'upgrade') {
     $args[] = '--skip-enable-extension';  // never touch the system php.ini
 }
 
-$php = getenv('COMPOSER_PIE_PHP') ?: PHP_BINARY;
 $process = proc_open([$php, $phar, ...$args], [STDIN, STDOUT, STDERR], $pipes, null, $env);
 $exit = proc_close($process);
 
 // Does the system PHP, without the project's extensions, already load extension $name?
-$systemLoads = function (string $name) use ($php, $phpExt): bool {
-    $scan = implode(':', array_diff(explode(':', getenv('PHP_INI_SCAN_DIR') ?: ''), [$phpExt . '/conf.d'])) ?: ':';
+$systemLoads = function (string $name) use ($php, $confDir): bool {
+    $scan = implode(':', array_diff(explode(':', getenv('PHP_INI_SCAN_DIR') ?: ''), [$confDir])) ?: ':';
     $out = (string) shell_exec(sprintf('PHP_INI_SCAN_DIR=%s %s -r %s 2>/dev/null', escapeshellarg($scan), escapeshellarg($php), escapeshellarg('echo extension_loaded(' . var_export($name, true) . ') ? 1 : 0;')));
     return $out === '1';
 };
-PhpExt::sync($phpExt, $systemLoads);
+PhpExt::sync($phpExt, $confDir, $soPrefix, $systemLoads);
 exit($exit);

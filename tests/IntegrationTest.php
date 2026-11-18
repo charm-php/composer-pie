@@ -92,4 +92,25 @@ final class IntegrationTest extends TestCase
         $this->sh('vendor/bin/pie install apcu/apcu');
         $this->assertSame('1', $this->sh('vendor/bin/php -r \'echo (int) extension_loaded("apcu");\''), 'no "already loaded" warning expected');
     }
+
+    /** Regression: one conf.d was shared by all PHP builds, so the second PHP loaded the first one's .so. */
+    public function testEachPhpVersionLoadsItsOwnBuild(): void
+    {
+        $other = '/usr/bin/php8.4';
+        if (!is_executable($other) || PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION === '8.4') {
+            $this->markTestSkipped('needs /usr/bin/php8.4 and a different php running the tests');
+        }
+        $check = 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION, " ds=", (int) extension_loaded("ds");';
+
+        $this->sh('vendor/bin/pie install php-ds/ext-ds');
+        $this->sh('COMPOSER_PIE_PHP=' . $other . ' vendor/bin/pie install php-ds/ext-ds');
+
+        // exact output: no "Unable to initialize module" warnings
+        $this->assertSame('8.4 ds=1', $this->sh('COMPOSER_PIE_PHP=' . $other . ' vendor/bin/php -r ' . escapeshellarg($check)));
+        $this->assertSame(PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION . ' ds=1', $this->sh('vendor/bin/php -r ' . escapeshellarg($check)));
+        $this->assertCount(2, glob($this->project . '/vendor/php-ext/conf.d/*/ds.ini'));
+
+        // an empty argument is not an error
+        $this->assertStringNotContainsString('Warning', $this->sh('vendor/bin/pie "" list', 1));
+    }
 }

@@ -28,13 +28,17 @@ fi
 # Composer's sh proxy sets COMPOSER_RUNTIME_BIN_DIR (= <project>/vendor/bin); fall back to our location
 # (<project>/vendor/charm/composer-pie/bin) when run directly.
 vendor=${COMPOSER_RUNTIME_BIN_DIR:+$COMPOSER_RUNTIME_BIN_DIR/..}
-confd=$(cd "${vendor:-$(dirname "$self")/../../..}" && pwd)/php-ext/conf.d
+# One conf.d per real PHP binary (an extension .so only fits the build it was made for), named after the resolved
+# path; src/PhpExt.php confDirFor() computes the same name.
+case $real in */*) ;; *) real=$(command -v "$real") ;; esac
+key=$(readlink -f "$real" 2>/dev/null || echo "$real")
+key=$(printf '%s' "${key#/}" | tr -c 'A-Za-z0-9._-' _)
+confd=$(cd "${vendor:-$(dirname "$self")/../../..}" && pwd)/php-ext/conf.d/$key
 
-# Leading ":" keeps PHP's own scan dir; an existing value is kept after ours.
-# Child processes inherit it, so do not add it twice (extensions would load twice).
-case ":$PHP_INI_SCAN_DIR:" in
-    *":$confd:"*) ;;
-    *) PHP_INI_SCAN_DIR="${PHP_INI_SCAN_DIR:-}:$confd" ;;
-esac
+# Leading ":" keeps PHP's own scan dir; an existing value is kept before ours. Entries of other conf.d dirs of
+# this project are dropped, so a child run with another PHP does not load the parent's extensions (nor twice).
+base=$(printf '%s' "${confd%/*}/" | sed 's/[][\.*^$|]/\\&/g')
+scan=$(printf ':%s' "$PHP_INI_SCAN_DIR" | sed "s|:$base[^:]*||g")
+PHP_INI_SCAN_DIR="${scan#:}:$confd"
 export PHP_INI_SCAN_DIR
 exec "$real" "$@"

@@ -17,6 +17,17 @@ final class PhpExt
     private const MARKER = '; managed by charm/composer-pie: ';
 
     /**
+     * The conf.d directory for one PHP binary: named after its resolved path, so `php` and `php8.5` share one.
+     * bin/php computes the same name in sh.
+     */
+    public static function confDirFor(string $phpExtDir, string $phpBinary): string
+    {
+        $real = realpath($phpBinary) ?: $phpBinary;
+
+        return $phpExtDir . '/conf.d/' . preg_replace('/[^A-Za-z0-9._-]/', '_', ltrim($real, '/'));
+    }
+
+    /**
      * @param bool $disabled The system PHP already loads this extension, so loading it again would only warn
      * @return string The ini file contents loading $so
      */
@@ -28,19 +39,19 @@ final class PhpExt
     }
 
     /**
-     * Write an ini file for every extension PIE has just installed, and drop ini files whose .so has gone.
+     * Write an ini file for every extension PIE has just installed for the target PHP (its .so lies below
+     * $soPrefix, INSTALL_ROOT + that PHP's extension_dir), and drop ini files whose .so has gone.
      *
      * @param callable(string): bool $systemLoads Whether the system PHP (without our conf.d) loads extension $name
      * @return list<string> names of the extensions installed in the project
      */
-    public static function sync(string $phpExtDir, callable $systemLoads): array
+    public static function sync(string $phpExtDir, string $confDir, string $soPrefix, callable $systemLoads): array
     {
-        $confDir = $phpExtDir . '/conf.d';
         foreach (glob($phpExtDir . '/pie/php*/vendor/composer/installed.json') ?: [] as $file) {
             $packages = json_decode((string) file_get_contents($file), true)['packages'] ?? [];
             foreach ($packages as $package) {
                 $so = $package['extra']['pie-installed-binary'] ?? null;
-                if (!is_string($so) || !str_starts_with($package['type'] ?? '', 'php-ext') || !is_file($so)) {
+                if (!is_string($so) || !str_starts_with($so, $soPrefix) || !str_starts_with($package['type'] ?? '', 'php-ext') || !is_file($so)) {
                     continue;
                 }
                 $name = basename($so, '.so');
@@ -70,11 +81,14 @@ final class PhpExt
         return $present;
     }
 
-    /** Remove the extension installed from PIE package $package: its ini, its .so and its pie.json requirement. */
-    public static function uninstall(string $phpExtDir, string $package): bool
+    /**
+     * Remove the extension installed from PIE package $package for the PHP with conf.d $confDir: its ini, its .so
+     * and, when no other PHP build uses the package either, its pie.json requirement.
+     */
+    public static function uninstall(string $phpExtDir, string $confDir, string $package): bool
     {
         $found = false;
-        foreach (glob($phpExtDir . '/conf.d/*.ini') ?: [] as $ini) {
+        foreach (glob($confDir . '/*.ini') ?: [] as $ini) {
             $contents = (string) file_get_contents($ini);
             if (!str_starts_with($contents, self::MARKER . $package . "\n")) {
                 continue;
@@ -86,6 +100,11 @@ final class PhpExt
             $found = true;
         }
 
+        foreach (glob($phpExtDir . '/conf.d/*/*.ini') ?: [] as $other) {
+            if (str_starts_with((string) file_get_contents($other), self::MARKER . $package . "\n")) {
+                return $found;
+            }
+        }
         foreach (glob($phpExtDir . '/pie/php*/pie.json') ?: [] as $file) {
             $json = json_decode((string) file_get_contents($file), true);
             if (isset($json['require'][$package])) {
