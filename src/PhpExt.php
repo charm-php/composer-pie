@@ -112,6 +112,7 @@ final class PhpExt
             $json = json_decode((string) file_get_contents($file), true);
             if (isset($json['require'][$package])) {
                 unset($json['require'][$package]);
+                $json['require'] = (object) $json['require'];  // PIE's schema wants {} not []
                 file_put_contents($file, json_encode($json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
             }
         }

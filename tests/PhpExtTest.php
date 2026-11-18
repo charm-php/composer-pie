@@ -100,7 +100,8 @@ final class PhpExtTest extends TestCase
         $this->assertSame(['ds'], PhpExt::uninstall($this->dir, $this->conf, 'php-ds/ext-ds'));
         $this->assertFileDoesNotExist($ds);
         $this->assertFileDoesNotExist($this->conf . '/ds.ini');
-        $this->assertSame([], json_decode(file_get_contents($this->dir . '/pie/php8.5_abc/pie.json'), true)['require']);
+        // PIE's schema rejects "require": []
+        $this->assertStringContainsString('"require": {}', file_get_contents($this->dir . '/pie/php8.5_abc/pie.json'));
     }
 
     public function testSyncOnlyWritesExtensionsBuiltForTheTargetPhp(): void

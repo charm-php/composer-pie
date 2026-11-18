@@ -14,6 +14,8 @@ vendor/bin/php -r 'var_dump(extension_loaded("xdebug"));'
 
 `vendor/bin/pie install` with no arguments is PIE's project mode (installs the `ext-*` requirements of your
 `composer.json`; PIE asks you to pick a package for each unless you pass `--select=ext=vendor/package`).
+Selections given with `--select` are remembered in `composer.json` under `extra.composer-pie.select`
+and passed on later runs, so project mode needs no arguments afterwards.
 `vendor/bin/pie uninstall vendor/package` removes the extension from the project.
 
 ## How it works

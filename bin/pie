@@ -104,6 +104,33 @@ if ($command === 'install' || $command === 'upgrade') {
     $args[] = '--skip-enable-extension';  // never touch the system php.ini
 }
 
+// Project mode (`pie install` without a package) asks which package provides each missing ext-*, unless told with
+// --select ext=vendor/package. Selections given are remembered in composer.json extra.composer-pie.select.
+$composerJson = is_file($root . '/composer.json') ? json_decode((string) file_get_contents($root . '/composer.json'), true) : null;
+$stored = $composerJson['extra']['composer-pie']['select'] ?? [];
+$selected = [];
+$isProjectMode = false;
+if ($command === 'install') {
+    $rest = array_slice($args, array_search('install', $args) + 1);
+    $isProjectMode = true;
+    foreach ($rest as $i => $arg) {
+        if (preg_match('/^--select(?:=(.*))?$/s', $arg, $m)) {
+            $value = $m[1] ?? ($rest[$i + 1] ?? '');
+            if (str_contains($value, '=')) {
+                [$ext, $pkg] = explode('=', $value, 2);
+                $selected[$ext] = $pkg;
+            }
+        } elseif (preg_match('#^[\w.-]+/[\w.-]+(:.*)?$#', $arg)) {
+            $isProjectMode = false;
+        }
+    }
+    if ($isProjectMode && is_array($stored)) {
+        foreach (array_diff_key($stored, $selected) as $ext => $pkg) {
+            array_push($args, '--select', "$ext=$pkg");
+        }
+    }
+}
+
 $process = proc_open([$php, $phar, ...$args], [STDIN, STDOUT, STDERR], $pipes, null, $env);
 $exit = proc_close($process);
 
@@ -113,6 +140,10 @@ $systemLoads = function (string $name) use ($php, $confDir): bool {
     $out = (string) shell_exec(sprintf('PHP_INI_SCAN_DIR=%s %s -r %s 2>/dev/null', escapeshellarg($scan), escapeshellarg($php), escapeshellarg('echo extension_loaded(' . var_export($name, true) . ') ? 1 : 0;')));
     return $out === '1';
 };
+if ($selected && $isProjectMode && $exit === 0 && is_array($stored) && array_diff_assoc($selected, $stored) && is_file($root . '/composer.json')) {
+    $composerConfig('--json', 'extra.composer-pie.select', json_encode($selected + $stored));
+}
+
 $extensions = PhpExt::sync($phpExt, $confDir, $soPrefix, $systemLoads);
 
 if (($command === 'install' || $command === 'upgrade') && is_file($root . '/composer.json')) {

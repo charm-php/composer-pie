@@ -131,4 +131,22 @@ final class IntegrationTest extends TestCase
         $this->sh('vendor/bin/pie uninstall php-ds/ext-ds');
         $this->assertArrayNotHasKey('ext-ds', json_decode(file_get_contents($this->project . '/composer.json'), true)['config']['platform'] ?? []);
     }
+
+    public function testProjectModeRemembersSelections(): void
+    {
+        $json = json_decode(file_get_contents($this->project . '/composer.json'), true);
+        $json['require']['ext-ds'] = '*';
+        file_put_contents($this->project . '/composer.json', json_encode($json));
+
+        $out = $this->sh('vendor/bin/pie install </dev/null', 1);
+        $this->assertStringContainsString('--select=ds=php-ds/ext-ds', $out);
+
+        $this->sh('vendor/bin/pie install --select ds=php-ds/ext-ds </dev/null');
+        $this->assertSame(['ds' => 'php-ds/ext-ds'], json_decode(file_get_contents($this->project . '/composer.json'), true)['extra']['composer-pie']['select']);
+
+        // no --select needed any more
+        $this->sh('vendor/bin/pie uninstall php-ds/ext-ds');
+        $this->sh('vendor/bin/pie install </dev/null');
+        $this->assertSame('1', $this->sh('vendor/bin/php -r \'echo (int) extension_loaded("ds");\''));
+    }
 }
