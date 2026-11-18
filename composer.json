@@ -3,7 +3,23 @@
     "description": "PIE (the PHP Foundation's extension installer), per project: install PHP extensions into vendor/ and run PHP with them loaded.",
     "type": "library",
     "license": "MIT",
-    "keywords": ["pie", "php-ext", "extensions", "composer"],
+    "authors": [
+        {
+            "name": "Frode Børli",
+            "email": "frode@ennerd.com"
+        }
+    ],
+    "homepage": "https://github.com/charm-php/composer-pie",
+    "support": {
+        "issues": "https://github.com/charm-php/composer-pie/issues",
+        "source": "https://github.com/charm-php/composer-pie"
+    },
+    "keywords": [
+        "pie",
+        "php-ext",
+        "extensions",
+        "composer"
+    ],
     "require": {
         "php": "^8.3"
     },
@@ -15,7 +31,10 @@
             "Charm\\ComposerPie\\": "src/"
         }
     },
-    "bin": ["bin/pie", "bin/php"],
+    "bin": [
+        "bin/pie",
+        "bin/php"
+    ],
     "config": {
         "sort-packages": true
     }
