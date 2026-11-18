@@ -1,0 +1,22 @@
+{
+    "name": "charm/composer-pie",
+    "description": "PIE (the PHP Foundation's extension installer), per project: install PHP extensions into vendor/ and run PHP with them loaded.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["pie", "php-ext", "extensions", "composer"],
+    "require": {
+        "php": "^8.3"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.0 || ^12.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Charm\\ComposerPie\\": "src/"
+        }
+    },
+    "bin": ["bin/pie", "bin/php"],
+    "config": {
+        "sort-packages": true
+    }
+}
