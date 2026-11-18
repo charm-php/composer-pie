@@ -1,79 +1,160 @@
 # charm/composer-pie
 
-[PIE](https://github.com/php/pie) (the PHP Foundation's extension installer), per project. Extensions are installed into
-`vendor/php-ext/` instead of the system PHP, and `vendor/bin/php` runs PHP with them loaded.
-
-This is an unofficial wrapper around PIE, not part of it. It downloads the real `pie.phar` (pinned to one release, sha256
-verified, cached in `${XDG_CACHE_HOME:-~/.cache}/composer-pie/`) and runs it.
+Install PHP extensions into your project instead of into the system PHP. No root, no php.ini changes, and each
+project gets its own extensions.
 
 ```bash
 composer require charm/composer-pie
-vendor/bin/pie install xdebug/xdebug      # any PIE command; installs into the project, never uses sudo
-vendor/bin/php -r 'var_dump(extension_loaded("xdebug"));'
+vendor/bin/pie install xdebug/xdebug
+vendor/bin/php your-script.php            # runs with xdebug loaded
 ```
 
-`vendor/bin/pie install` with no arguments is PIE's project mode (installs the `ext-*` requirements of your
-`composer.json`; PIE asks you to pick a package for each unless you pass `--select=ext=vendor/package`).
-Selections given with `--select` are remembered in `composer.json` under `extra.composer-pie.select`
-and passed on later runs, so project mode needs no arguments afterwards.
-`vendor/bin/pie uninstall vendor/package` removes the extension from the project.
+It uses [PIE](https://github.com/php/pie), the PHP Foundation's extension installer, to find, download and build the
+extension. composer-pie is an unofficial companion to PIE, not part of it.
+
+## What it is for
+
+composer-pie is for PHP that runs from the command line: long-running servers and workers, scripts, tests and tools.
+
+- **Application servers** such as [Swerve](https://github.com/phasync/swerve), and event-loop libraries such as
+  [phasync](https://github.com/phasync/phasync), ReactPHP or AMPHP.
+- **Workers and scripts**: queue workers, cron jobs, CLI tools, test suites.
+
+It cannot add extensions to php-fpm or Apache's mod_php: those start PHP on their own, not through your project.
+For a web application that needs an extension the system lacks, serve it with Swerve instead. Swerve runs
+WordPress, Laravel, Symfony, Drupal and other php-fpm applications unchanged, and its workers load the project's
+extensions:
+
+```bash
+composer require charm/composer-pie phasync/swerve
+vendor/bin/pie install php-ds/ext-ds
+composer exec -- swerve -S public --http=0.0.0.0:8080
+```
+
+(Verified with WordPress 7.1 on Swerve using an extension that only the project has.)
+
+## Running your code with the project's extensions
+
+Start PHP through the project, in any of these ways:
+
+| Command | |
+|---|---|
+| `vendor/bin/php script.php` | runs PHP with the project's extensions |
+| `composer exec -- php script.php` | the same |
+| `composer exec -- phpunit` | any tool installed in `vendor/bin` |
+| `"scripts": {"test": "php vendor/bin/phpunit"}` | `php` in Composer scripts |
+
+Programs started from there inherit the extensions: worker processes, `proc_open(PHP_BINARY, ...)`, child scripts.
+
+Composer's launchers in `vendor/bin` start the system PHP, so a tool run directly as `vendor/bin/phpunit` does not
+see the project's extensions. Run it with `composer exec -- phpunit` or `vendor/bin/php vendor/bin/phpunit`.
+
+## Installing extensions: your situation
+
+`vendor/bin/pie install <package>` takes any [PIE package](https://packagist.org/explore/?type=php-ext), e.g.
+`xdebug/xdebug`, `apcu/apcu`, `phpredis/phpredis`, `php-ds/ext-ds`. It uses a pre-built binary when the extension
+publishes one for your platform, and otherwise builds it from source. What you need depends on your system:
+
+### Your system can build PHP extensions
+
+You have a C compiler, `make`, `autoconf` and the PHP development files (`php-dev` on Debian and Ubuntu,
+`php-devel` on Fedora and RHEL). Nothing more to do:
+
+```bash
+vendor/bin/pie install xdebug/xdebug
+```
+
+### The extension publishes pre-built binaries
+
+Then no build tools are needed at all; `vendor/bin/pie install` downloads the binary for your PHP version and
+platform.
+
+### Linux without build tools
+
+composer-pie can download a C compiler and the other build tools for you, into your user's cache
+(`~/.cache/composer-pie/toolchain`). Nothing is installed system-wide, and every project shares it. It is a one-time
+download of about 170 MB.
+
+```bash
+vendor/bin/pie install xdebug/xdebug --install-toolchain
+```
+
+Run interactively, it asks before downloading. In CI or a Docker build, set `COMPOSER_PIE_TOOLCHAIN=1` instead. This
+works on Linux with glibc (Debian, Ubuntu, Fedora, RHEL and most others) on x86_64; arm64 is set up but not yet tested.
+
+### Alpine Linux or macOS without build tools
+
+composer-pie tells you what to install:
+
+```bash
+apk add build-base autoconf php83-dev          # Alpine (match your PHP version)
+xcode-select --install && brew install autoconf  # macOS
+```
+
+### The extension needs a system library
+
+Some extensions use a library from your system: `imagick` needs ImageMagick, `rdkafka` needs librdkafka. Install the
+library's development package (e.g. `apt install libmagickwand-dev`), then `vendor/bin/pie install` as usual.
+
+### The extension is already installed system-wide
+
+Nothing to do. composer-pie notices and leaves it to the system PHP.
+
+## Declaring the extensions your project needs
+
+List them in `composer.json` as usual, and install them all with one command:
+
+```json
+{
+    "require": { "ext-apcu": "*" },
+    "require-dev": { "ext-xdebug": "*" }
+}
+```
+
+```bash
+vendor/bin/pie install                      # installs every missing ext-* requirement
+vendor/bin/pie install --no-dev             # production: skip require-dev
+```
+
+If several packages provide an extension, PIE asks which one to use; pass `--select ext=vendor/package` once and
+composer-pie remembers the choice in `composer.json`.
+
+After an install, composer-pie also records the extension in `composer.json` (`config.platform`), so Composer
+accepts packages that require it. If you have a `composer.lock`, run `composer update --lock` once after the first
+install.
+
+To remove an extension from the project: `vendor/bin/pie uninstall xdebug/xdebug`.
 
 ## How it works
 
-- `vendor/bin/pie` runs PIE with `INSTALL_ROOT=vendor/php-ext/root`, `--skip-enable-extension`, and PIE's own state
-  (`pie.json`, `pie.lock`, sources) in `vendor/php-ext/pie/`, so nothing is recorded against the system PHP. Then it
-  writes `vendor/php-ext/conf.d/<ext>.ini` with `extension=<path to .so>` (`zend_extension=` for Xdebug and the like).
-- `vendor/bin/php` runs the real PHP (`$COMPOSER_PIE_PHP`, else the first `php` on `PATH` that is not this wrapper)
-  with `PHP_INI_SCAN_DIR=":<project>/vendor/php-ext/conf.d"`. The leading `:` keeps the system's scan directory, and
-  child processes inherit the variable. `composer exec -- php ...` and `php` lines in composer `scripts` find
-  `vendor/bin/php` first on `PATH`.
-- If `composer.json` or `composer.lock` is newer than the last `vendor/bin/pie install`, `vendor/bin/php` prints one line to
-  stderr suggesting to run it again, and carries on. Projects that never ran `vendor/bin/pie` are not nagged.
-- An extension the system PHP already loads is installed but left disabled in the project (no "already loaded" warnings).
-
-## Building from source
-
-`vendor/bin/pie install` first lets PIE use only pre-built binaries published by the extension. If there is none
-for your platform, composer-pie checks for a build environment: a C compiler, `make`, `autoconf`, `m4`, and
-`phpize` + `php-config` for exactly the PHP you target (same version, extension_dir), and then lets PIE build from
-source. PIE's own offer to install build tools with the system package manager (sudo) is switched off.
-
-If something is missing and you are on Linux (glibc, x86_64 or aarch64), composer-pie can provide it in
-`${XDG_CACHE_HOME:-~/.cache}/composer-pie/toolchain/`, shared by all projects, and nothing is installed system-wide:
-
-- a C toolchain from conda-forge (gcc with a glibc 2.28 sysroot, make, autoconf, m4, perl, zlib; about 170 MB
-  download, 800 MB on disk) installed with a pinned micromamba and pinned lock files (`toolchain/*.lock`, sha256
-  verified);
-- if the PHP has no `php-config`/`phpize` (no `-dev` package), these and the headers are built from the matching
-  php-src release (sha256 verified against php.net), about 10 MB.
-
-It asks `[y/N]` when interactive. Non-interactively, pass `--install-toolchain` or set `COMPOSER_PIE_TOOLCHAIN=1`,
-otherwise it explains what is missing and fails. On other platforms (musl, macOS) it tells you what to install
-(`apk add build-base autoconf php-dev`, `xcode-select --install`, ...). Extensions that need system libraries
-(other than zlib) still need those libraries' headers installed; the toolchain's compiler does not search `/usr/include`.
-
-## Composer and `ext-*` requirements
-
-Composer checks `ext-*` requirements against the PHP that runs Composer, which does not load the project's
-extensions, so `composer require some/package` (needing `ext-ds`) would fail. After `pie install`, composer-pie records
-the installed version in `composer.json` under `config.platform` (`"ext-ds": "2.0.0"`, via `composer config`), and
-`pie uninstall` removes it. The rule is deliberately simple: every extension the project loads gets an entry, except
-those the system PHP already loads itself (Composer sees those anyway). If several PHP binaries are used in one
-project, the last install wins. `config.platform` is part of `composer.lock`'s hash, so run `composer update --lock`
-once after the first install if you have a lock file.
+- `vendor/bin/pie` runs the real PIE (a pinned, checksum-verified release) with the project as its target: the
+  extension goes to `vendor/php-ext/`, and PIE's own records stay there too. PIE is never allowed to edit the system
+  `php.ini` or to use sudo.
+- composer-pie then writes an ini file for the extension in `vendor/php-ext/conf.d/`, one directory per PHP binary,
+  so a project used with PHP 8.4 and 8.5 keeps a build for each.
+- `vendor/bin/php` starts your real PHP with that directory added to `PHP_INI_SCAN_DIR`. The system's own ini files
+  still load, and programs it starts inherit the setting.
+- When `composer.json` or `composer.lock` changed since the last `vendor/bin/pie install`, `vendor/bin/php` prints a
+  one-line reminder to run it again.
+- The build toolchain comes from [conda-forge](https://conda-forge.org/) (gcc, make, autoconf), installed with
+  [micromamba](https://mamba.readthedocs.io/) from pinned, checksum-verified lock files. If your PHP has no
+  development files, composer-pie builds them from the matching php-src release.
 
 ## Limits
 
-- CLI and long-running servers started through `vendor/bin/php` only. Not php-fpm or mod_php: they do not go through the
-  wrapper.
-- `pie show` and `pie upgrade` do not understand project installs (PIE looks for the `.so` in the system extension
-  directory). Re-run `pie install <package>` to upgrade.
-- Linux and macOS only for now; Windows not yet.
+- Command-line PHP only; not php-fpm or Apache (see above).
+- Linux and macOS. Windows is not supported yet.
+- `vendor/bin/pie show` and `vendor/bin/pie upgrade` do not understand project installs yet; to upgrade, run
+  `vendor/bin/pie install <package>` again.
 
-## Tests
+## Development
 
 ```bash
 composer install
 vendor/bin/phpunit                      # unit tests
-vendor/bin/phpunit --group integration  # real installs: needs network and a compiler, takes about a minute
+vendor/bin/phpunit --group integration  # real installs: needs network and a compiler, a few minutes
 ```
+
+## License
+
+MIT. PIE is BSD-3-Clause, by the PHP Foundation.
