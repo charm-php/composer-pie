@@ -1,0 +1,40 @@
+#!/bin/sh
+# charm/composer-pie: run the real PHP with the project's extensions (vendor/php-ext/conf.d) loaded.
+# Real PHP: $COMPOSER_PIE_PHP, otherwise the first `php` on PATH that is not a composer-pie wrapper.
+
+self=$(readlink -f "$0" 2>/dev/null || echo "$0")
+if [ -n "$COMPOSER_PIE_PHP" ]; then
+    real=$COMPOSER_PIE_PHP
+else
+    real=
+    oldifs=$IFS
+    IFS=:
+    for dir in $PATH; do
+        c=${dir:-.}/php
+        [ -f "$c" ] && [ -x "$c" ] || continue
+        [ "$(readlink -f "$c" 2>/dev/null)" = "$self" ] && continue
+        # Composer's generated vendor/bin/php proxy mentions charm/composer-pie; a real php binary does not
+        head -c 4096 "$c" | grep -aq 'charm/composer-pie' && continue
+        real=$c
+        break
+    done
+    IFS=$oldifs
+    if [ -z "$real" ]; then
+        echo "composer-pie: no real php found on PATH (set COMPOSER_PIE_PHP)" >&2
+        exit 127
+    fi
+fi
+
+# Composer's sh proxy sets COMPOSER_RUNTIME_BIN_DIR (= <project>/vendor/bin); fall back to our location
+# (<project>/vendor/charm/composer-pie/bin) when run directly.
+vendor=${COMPOSER_RUNTIME_BIN_DIR:+$COMPOSER_RUNTIME_BIN_DIR/..}
+confd=$(cd "${vendor:-$(dirname "$self")/../../..}" && pwd)/php-ext/conf.d
+
+# Leading ":" keeps PHP's own scan dir; an existing value is kept after ours.
+# Child processes inherit it, so do not add it twice (extensions would load twice).
+case ":$PHP_INI_SCAN_DIR:" in
+    *":$confd:"*) ;;
+    *) PHP_INI_SCAN_DIR="${PHP_INI_SCAN_DIR:-}:$confd" ;;
+esac
+export PHP_INI_SCAN_DIR
+exec "$real" "$@"
