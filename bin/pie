@@ -35,6 +35,16 @@ if (!is_file($phar) || hash_file('sha256', $phar) !== PIE_SHA256) {
     rename($phar . '.tmp', $phar);
 }
 
+// Composer checks `ext-*` requirements against the PHP that runs Composer, which does not load the project's
+// extensions. config.platform in composer.json tells it what the project's PHP will have.
+$root = dirname($vendor);
+$composerConfig = function (string ...$args) use ($root): void {
+    exec(escapeshellarg(getenv('COMPOSER_BINARY') ?: 'composer') . ' config --no-interaction -d ' . escapeshellarg($root) . ' ' . implode(' ', array_map('escapeshellarg', $args)) . ' 2>&1', $out, $status);
+    if ($status !== 0) {
+        fwrite(STDERR, "composer-pie: could not update composer.json config.platform: " . implode("\n", $out) . "\n");
+    }
+};
+
 $args = array_slice($argv, 1);
 $command = null;
 foreach ($args as $arg) {
@@ -75,8 +85,13 @@ if ($command === 'uninstall') {
             continue;
         }
         $package = explode(':', $arg)[0];
-        if (PhpExt::uninstall($phpExt, $confDir, $package)) {
+        if ($removed = PhpExt::uninstall($phpExt, $confDir, $package)) {
             echo "Removed $package from this project\n";
+            foreach ($removed as $name) {
+                if (!glob($phpExt . '/conf.d/*/' . $name . '.ini') && is_file($root . '/composer.json')) {
+                    $composerConfig('--unset', 'platform.ext-' . $name);
+                }
+            }
         } else {
             fwrite(STDERR, "composer-pie: $package is not installed in this project\n");
             $status = 1;
@@ -98,5 +113,22 @@ $systemLoads = function (string $name) use ($php, $confDir): bool {
     $out = (string) shell_exec(sprintf('PHP_INI_SCAN_DIR=%s %s -r %s 2>/dev/null', escapeshellarg($scan), escapeshellarg($php), escapeshellarg('echo extension_loaded(' . var_export($name, true) . ') ? 1 : 0;')));
     return $out === '1';
 };
-PhpExt::sync($phpExt, $confDir, $soPrefix, $systemLoads);
+$extensions = PhpExt::sync($phpExt, $confDir, $soPrefix, $systemLoads);
+
+if (($command === 'install' || $command === 'upgrade') && is_file($root . '/composer.json')) {
+    // Record the version of every extension the project provides. Extensions the system PHP loads itself are
+    // left out: Composer sees those and must keep seeing their real version.
+    $platform = json_decode((string) file_get_contents($root . '/composer.json'), true)['config']['platform'] ?? [];
+    $changed = false;
+    foreach (array_keys(array_filter($extensions)) as $name) {
+        $version = trim((string) shell_exec(sprintf('PHP_INI_SCAN_DIR=%s %s -r %s 2>/dev/null', escapeshellarg($env['PHP_INI_SCAN_DIR']), escapeshellarg($php), escapeshellarg('echo phpversion($argv[1]);')) . ' ' . escapeshellarg($name)));
+        if (preg_match('/^\d+(\.\d+)*/', $version) && ($platform['ext-' . $name] ?? null) !== $version) {
+            $composerConfig('platform.ext-' . $name, $version);
+            $changed = true;
+        }
+    }
+    if ($changed && is_file($root . '/composer.lock')) {
+        fwrite(STDERR, "composer-pie: composer.json changed; run `composer update --lock` to refresh composer.lock's hash\n");
+    }
+}
 exit($exit);

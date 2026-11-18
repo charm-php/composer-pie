@@ -27,6 +27,16 @@ vendor/bin/php -r 'var_dump(extension_loaded("xdebug"));'
   `vendor/bin/php` first on `PATH`.
 - An extension the system PHP already loads is installed but left disabled in the project (no "already loaded" warnings).
 
+## Composer and `ext-*` requirements
+
+Composer checks `ext-*` requirements against the PHP that runs Composer, which does not load the project's
+extensions, so `composer require some/package` (needing `ext-ds`) would fail. After `pie install`, composer-pie records
+the installed version in `composer.json` under `config.platform` (`"ext-ds": "2.0.0"`, via `composer config`), and
+`pie uninstall` removes it. The rule is deliberately simple: every extension the project loads gets an entry, except
+those the system PHP already loads itself (Composer sees those anyway). If several PHP binaries are used in one
+project, the last install wins. `config.platform` is part of `composer.lock`'s hash, so run `composer update --lock`
+once after the first install if you have a lock file.
+
 ## Limits
 
 - CLI and long-running servers started through `vendor/bin/php` only. Not php-fpm or mod_php: they do not go through the

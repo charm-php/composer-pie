@@ -56,7 +56,7 @@ final class PhpExtTest extends TestCase
         $xdebug = $this->installed('xdebug/xdebug', 'xdebug', 'php-ext-zend');
         $ds = $this->installed('php-ds/ext-ds', 'ds', 'php-ext');
 
-        $this->assertEqualsCanonicalizing(['xdebug', 'ds'], $this->sync(fn () => false));
+        $this->assertEqualsCanonicalizing(['xdebug', 'ds'], array_keys($this->sync(fn () => false)));
         $this->assertStringContainsString("zend_extension=$xdebug\n", file_get_contents($this->conf . '/xdebug.ini'));
         $this->assertStringContainsString("\nextension=$ds\n", file_get_contents($this->conf . '/ds.ini'));
     }
@@ -76,10 +76,10 @@ final class PhpExtTest extends TestCase
         // PIE forgets xdebug once something else is installed (see PhpExt docblock)
         unlink($this->dir . '/pie/php8.5_abc/vendor/composer/installed.json');
         $ds = $this->installed('php-ds/ext-ds', 'ds', 'php-ext');
-        $this->assertEqualsCanonicalizing(['xdebug', 'ds'], $this->sync(fn () => false));
+        $this->assertEqualsCanonicalizing(['xdebug', 'ds'], array_keys($this->sync(fn () => false)));
 
         unlink($ds);
-        $this->assertSame(['xdebug'], $this->sync(fn () => false));
+        $this->assertSame(['xdebug' => true], $this->sync(fn () => false));
         $this->assertFileDoesNotExist($this->conf . '/ds.ini');
     }
 
@@ -96,8 +96,8 @@ final class PhpExtTest extends TestCase
         $ds = $this->installed('php-ds/ext-ds', 'ds', 'php-ext');
         $this->sync(fn () => false);
 
-        $this->assertFalse(PhpExt::uninstall($this->dir, $this->conf, 'nobody/nothing'));
-        $this->assertTrue(PhpExt::uninstall($this->dir, $this->conf, 'php-ds/ext-ds'));
+        $this->assertSame([], PhpExt::uninstall($this->dir, $this->conf, 'nobody/nothing'));
+        $this->assertSame(['ds'], PhpExt::uninstall($this->dir, $this->conf, 'php-ds/ext-ds'));
         $this->assertFileDoesNotExist($ds);
         $this->assertFileDoesNotExist($this->conf . '/ds.ini');
         $this->assertSame([], json_decode(file_get_contents($this->dir . '/pie/php8.5_abc/pie.json'), true)['require']);
@@ -115,7 +115,7 @@ final class PhpExtTest extends TestCase
         $json['packages'][] = ['name' => 'xdebug/xdebug', 'type' => 'php-ext-zend', 'extra' => ['pie-installed-binary' => $other]];
         file_put_contents($file, json_encode($json));
 
-        $this->assertSame(['ds'], $this->sync(fn () => false));
+        $this->assertSame(['ds' => true], $this->sync(fn () => false));
     }
 
     public function testConfDirIsKeyedByResolvedBinary(): void
@@ -132,7 +132,7 @@ final class PhpExtTest extends TestCase
         mkdir($this->dir . '/conf.d/usr_bin_php8.4');
         file_put_contents($this->dir . '/conf.d/usr_bin_php8.4/ds.ini', PhpExt::ini('php-ds/ext-ds', '/x/ds.so', false));
 
-        $this->assertTrue(PhpExt::uninstall($this->dir, $this->conf, 'php-ds/ext-ds'));
+        $this->assertSame(['ds'], PhpExt::uninstall($this->dir, $this->conf, 'php-ds/ext-ds'));
         $this->assertArrayHasKey('php-ds/ext-ds', json_decode(file_get_contents($this->dir . '/pie/php8.5_abc/pie.json'), true)['require']);
     }
 }

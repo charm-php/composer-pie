@@ -43,7 +43,8 @@ final class PhpExt
      * $soPrefix, INSTALL_ROOT + that PHP's extension_dir), and drop ini files whose .so has gone.
      *
      * @param callable(string): bool $systemLoads Whether the system PHP (without our conf.d) loads extension $name
-     * @return list<string> names of the extensions installed in the project
+     * @return array<string, bool> the project's extensions for the target PHP, name => loaded by the project (false: left
+     *                             alone because the system PHP already loads it)
      */
     public static function sync(string $phpExtDir, string $confDir, string $soPrefix, callable $systemLoads): array
     {
@@ -74,7 +75,7 @@ final class PhpExt
             if (preg_match('/^;?(?:zend_)?extension=(.+)$/m', $contents, $m) && !is_file($m[1])) {
                 unlink($ini);
             } else {
-                $present[] = basename($ini, '.ini');
+                $present[basename($ini, '.ini')] = preg_match('/^(?:zend_)?extension=/m', $contents) === 1;
             }
         }
 
@@ -84,10 +85,12 @@ final class PhpExt
     /**
      * Remove the extension installed from PIE package $package for the PHP with conf.d $confDir: its ini, its .so
      * and, when no other PHP build uses the package either, its pie.json requirement.
+     *
+     * @return list<string> names of the extensions removed (none: not installed)
      */
-    public static function uninstall(string $phpExtDir, string $confDir, string $package): bool
+    public static function uninstall(string $phpExtDir, string $confDir, string $package): array
     {
-        $found = false;
+        $found = [];
         foreach (glob($confDir . '/*.ini') ?: [] as $ini) {
             $contents = (string) file_get_contents($ini);
             if (!str_starts_with($contents, self::MARKER . $package . "\n")) {
@@ -97,7 +100,7 @@ final class PhpExt
                 @unlink($m[1]);
             }
             unlink($ini);
-            $found = true;
+            $found[] = basename($ini, '.ini');
         }
 
         foreach (glob($phpExtDir . '/conf.d/*/*.ini') ?: [] as $other) {

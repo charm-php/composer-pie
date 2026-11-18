@@ -113,4 +113,22 @@ final class IntegrationTest extends TestCase
         // an empty argument is not an error
         $this->assertStringNotContainsString('Warning', $this->sh('vendor/bin/pie "" list', 1));
     }
+
+    /** Composer runs on a PHP that does not load the project's extensions; config.platform tells it. */
+    public function testComposerAcceptsPackagesRequiringProjectExtensions(): void
+    {
+        mkdir($this->project . '/needs-ds');
+        file_put_contents($this->project . '/needs-ds/composer.json', json_encode(['name' => 'test/needs-ds', 'require' => ['ext-ds' => '*']]));
+        $this->sh('composer config repositories.needs-ds path needs-ds');
+
+        $this->assertStringContainsString('ext-ds', $this->sh('composer require test/needs-ds:@dev --no-interaction', 2));
+
+        $this->sh('vendor/bin/pie install php-ds/ext-ds');
+        $platform = json_decode(file_get_contents($this->project . '/composer.json'), true)['config']['platform'];
+        $this->assertMatchesRegularExpression('/^\d+\.\d+/', $platform['ext-ds']);
+        $this->sh('composer require test/needs-ds:@dev --no-interaction');
+
+        $this->sh('vendor/bin/pie uninstall php-ds/ext-ds');
+        $this->assertArrayNotHasKey('ext-ds', json_decode(file_get_contents($this->project . '/composer.json'), true)['config']['platform'] ?? []);
+    }
 }
