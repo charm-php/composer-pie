@@ -74,4 +74,22 @@ final class BinPhpTest extends TestCase
         $out = $this->phpWith('PATH=' . escapeshellarg($this->project . '/vendor/bin:' . $this->project . '/tools') . ' COMPOSER_PIE_PHP=', 'echo 1;');
         $this->assertStringContainsString('no real php found', $out);
     }
+
+    public function testHintsWhenComposerJsonIsNewerThanTheInstallStamp(): void
+    {
+        $code = 'echo "ok";';
+        touch($this->project . '/composer.json', time() - 100);
+        $this->assertSame('ok', $this->phpWith('', $code), 'no stamp: no hint');
+
+        mkdir($this->project . '/vendor/php-ext');
+        touch($this->project . '/vendor/php-ext/stamp', time() - 50);
+        $this->assertSame('ok', $this->phpWith('', $code), 'stamp newer than composer.json: no hint');
+
+        touch($this->project . '/composer.json');
+        $this->assertSame("composer-pie: run vendor/bin/pie install to update the project's extensions\nok", $this->phpWith('', $code));
+
+        touch($this->project . '/vendor/php-ext/stamp', time() + 5);
+        touch($this->project . '/composer.lock', time() + 10);
+        $this->assertStringContainsString('run vendor/bin/pie install', $this->phpWith('', $code), 'composer.lock counts too');
+    }
 }

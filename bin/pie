@@ -97,6 +97,9 @@ if ($command === 'uninstall') {
             $status = 1;
         }
     }
+    if ($status === 0) {
+        touch($phpExt . '/stamp');
+    }
     exit($status);
 }
 
@@ -161,5 +164,8 @@ if (($command === 'install' || $command === 'upgrade') && is_file($root . '/comp
     if ($changed && is_file($root . '/composer.lock')) {
         fwrite(STDERR, "composer-pie: composer.json changed; run `composer update --lock` to refresh composer.lock's hash\n");
     }
+}
+if ($exit === 0 && ($command === 'install' || $command === 'upgrade')) {
+    touch($phpExt . '/stamp');  // bin/php hints when composer.json/composer.lock are newer than this
 }
 exit($exit);

@@ -27,6 +27,8 @@ and passed on later runs, so project mode needs no arguments afterwards.
   with `PHP_INI_SCAN_DIR=":<project>/vendor/php-ext/conf.d"`. The leading `:` keeps the system's scan directory, and
   child processes inherit the variable. `composer exec -- php ...` and `php` lines in composer `scripts` find
   `vendor/bin/php` first on `PATH`.
+- If `composer.json` or `composer.lock` is newer than the last `vendor/bin/pie install`, `vendor/bin/php` prints one line to
+  stderr suggesting to run it again, and carries on. Projects that never ran `vendor/bin/pie` are not nagged.
 - An extension the system PHP already loads is installed but left disabled in the project (no "already loaded" warnings).
 
 ## Composer and `ext-*` requirements

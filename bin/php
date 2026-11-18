@@ -33,7 +33,15 @@ vendor=${COMPOSER_RUNTIME_BIN_DIR:+$COMPOSER_RUNTIME_BIN_DIR/..}
 case $real in */*) ;; *) real=$(command -v "$real") ;; esac
 key=$(readlink -f "$real" 2>/dev/null || echo "$real")
 key=$(printf '%s' "${key#/}" | tr -c 'A-Za-z0-9._-' _)
-confd=$(cd "${vendor:-$(dirname "$self")/../../..}" && pwd)/php-ext/conf.d/$key
+vendor=$(cd "${vendor:-$(dirname "$self")/../../..}" && pwd)
+confd=$vendor/php-ext/conf.d/$key
+
+# Hint when composer.json / composer.lock changed since the last `vendor/bin/pie install` (which writes the stamp;
+# no stamp, no hint, so projects that never used pie are left alone). One stat each, no parsing.
+stamp=$vendor/php-ext/stamp
+if [ -f "$stamp" ] && { [ "$vendor/../composer.json" -nt "$stamp" ] || [ "$vendor/../composer.lock" -nt "$stamp" ]; }; then
+    echo "composer-pie: run vendor/bin/pie install to update the project's extensions" >&2
+fi
 
 # Leading ":" keeps PHP's own scan dir; an existing value is kept before ours. Entries of other conf.d dirs of
 # this project are dropped, so a child run with another PHP does not load the parent's extensions (nor twice).
