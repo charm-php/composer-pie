@@ -1,0 +1,97 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * charm/composer-pie: runs the real PIE (php/pie) so extensions are installed into this project
+ * (<vendor>/php-ext) instead of the system PHP, and keeps <vendor>/php-ext/conf.d in step.
+ * Unofficial wrapper; PIE is by the PHP Foundation (BSD-3-Clause).
+ */
+
+declare(strict_types=1);
+
+require __DIR__ . '/../src/PhpExt.php';
+
+use Charm\ComposerPie\PhpExt;
+
+const PIE_VERSION = '1.5.5';
+const PIE_SHA256 = '2ca0dff6868f1b53c095625674deef38ac698588e0a25e4321cd834a5b7553bc';
+
+$vendor = isset($_composer_autoload_path) ? dirname($_composer_autoload_path) : dirname(__DIR__, 3);
+$vendor = realpath($vendor) ?: $vendor;
+$phpExt = $vendor . '/php-ext';
+
+// Cached pie.phar, verified against the pinned sha256 on every run.
+$cache = (getenv('XDG_CACHE_HOME') ?: getenv('HOME') . '/.cache') . '/composer-pie';
+$phar = $cache . '/pie-' . PIE_VERSION . '.phar';
+if (!is_file($phar) || hash_file('sha256', $phar) !== PIE_SHA256) {
+    fwrite(STDERR, "composer-pie: downloading PIE " . PIE_VERSION . "\n");
+    $data = @file_get_contents('https://github.com/php/pie/releases/download/' . PIE_VERSION . '/pie.phar');
+    if ($data === false || hash('sha256', $data) !== PIE_SHA256) {
+        fwrite(STDERR, "composer-pie: could not download pie.phar " . PIE_VERSION . " with the expected sha256\n");
+        exit(1);
+    }
+    @mkdir($cache, 0777, true);
+    file_put_contents($phar . '.tmp', $data);
+    rename($phar . '.tmp', $phar);
+}
+
+$args = array_slice($argv, 1);
+$command = null;
+foreach ($args as $arg) {
+    if ($arg === '--') {
+        break;
+    }
+    if ($arg[0] !== '-') {
+        $command = $arg;
+        break;
+    }
+}
+
+@mkdir($phpExt . "/pie", 0777, true);
+@mkdir($phpExt . "/root", 0777, true);
+
+$env = getenv();
+$env['INSTALL_ROOT'] = $phpExt . '/root';          // where PIE installs: INSTALL_ROOT + extension_dir
+$env['PIE_WORKING_DIRECTORY'] = $phpExt . '/pie';  // pie.json, pie.lock and downloaded sources, instead of ~/.config/pie
+$env['COMPOSER_CACHE_DIR'] ??= $cache . '/composer-cache';
+// The target PHP (and PIE's own subprocesses) inherit this, so the project's extensions count as loaded.
+$scan = (string) ($env['PHP_INI_SCAN_DIR'] ?? '');
+if (!in_array($phpExt . '/conf.d', explode(':', $scan), true)) {
+    $env['PHP_INI_SCAN_DIR'] = $scan . ':' . $phpExt . '/conf.d';
+}
+
+if ($command === 'uninstall') {
+    // PIE cannot do this: it loses track of project extensions (see PhpExt) and its uninstall would also edit
+    // the system's php.ini / conf.d, with sudo if needed. So we remove the project's files ourselves.
+    $status = 0;
+    foreach (array_slice($args, array_search('uninstall', $args) + 1) as $arg) {
+        if ($arg[0] === '-') {
+            continue;
+        }
+        $package = explode(':', $arg)[0];
+        if (PhpExt::uninstall($phpExt, $package)) {
+            echo "Removed $package from this project\n";
+        } else {
+            fwrite(STDERR, "composer-pie: $package is not installed in this project\n");
+            $status = 1;
+        }
+    }
+    exit($status);
+}
+
+if ($command === 'install' || $command === 'upgrade') {
+    $args[] = '--skip-enable-extension';  // never touch the system php.ini
+}
+
+$php = getenv('COMPOSER_PIE_PHP') ?: PHP_BINARY;
+$process = proc_open([$php, $phar, ...$args], [STDIN, STDOUT, STDERR], $pipes, null, $env);
+$exit = proc_close($process);
+
+// Does the system PHP, without the project's extensions, already load extension $name?
+$systemLoads = function (string $name) use ($php, $phpExt): bool {
+    $scan = implode(':', array_diff(explode(':', getenv('PHP_INI_SCAN_DIR') ?: ''), [$phpExt . '/conf.d'])) ?: ':';
+    $out = (string) shell_exec(sprintf('PHP_INI_SCAN_DIR=%s %s -r %s 2>/dev/null', escapeshellarg($scan), escapeshellarg($php), escapeshellarg('echo extension_loaded(' . var_export($name, true) . ') ? 1 : 0;')));
+    return $out === '1';
+};
+PhpExt::sync($phpExt, $systemLoads);
+exit($exit);
